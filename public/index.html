@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lab 4 - Secure Connect Chat Client</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f0f2f5;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .chat-container {
+      background: white;
+      width: 100%;
+      max-width: 600px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      height: 650px;
+    }
+    .chat-header {
+      background: #1a73e8;
+      color: white;
+      padding: 16px 20px;
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .status-badge {
+      font-size: 12px;
+      background: #34a853;
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+    .room-setup {
+      padding: 16px;
+      background: #e8f0fe;
+      display: flex;
+      gap: 10px;
+      border-bottom: 1px solid #d2e3fc;
+    }
+    .room-setup input {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #c2d7fa;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .room-setup button {
+      background: #1a73e8;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .room-setup button:hover { background: #1557b0; }
+    .messages-area {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: #fafafa;
+    }
+    .message-item {
+      padding: 8px 14px;
+      border-radius: 8px;
+      max-width: 80%;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .system-message {
+      background: #f1f3f4;
+      color: #5f6368;
+      align-self: center;
+      font-size: 12px;
+      font-style: italic;
+    }
+    .user-message {
+      background: #ffffff;
+      border: 1px solid #e0e0e0;
+      align-self: flex-start;
+    }
+    .my-message {
+      background: #dcf8c6;
+      align-self: flex-end;
+    }
+    .sender-name {
+      font-weight: 600;
+      font-size: 11px;
+      color: #1a73e8;
+      margin-bottom: 2px;
+    }
+    .timestamp {
+      font-size: 10px;
+      color: #888;
+      text-align: right;
+      margin-top: 4px;
+    }
+    .input-area {
+      padding: 12px 16px;
+      background: white;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 10px;
+    }
+    .input-area input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .input-area button {
+      background: #1a73e8;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .input-area button:hover { background: #1557b0; }
+  
+    .hidden { display: none !important; }
+    .login-panel { padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+    .login-panel input { padding: 10px 14px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+    .login-panel button { background: #1a73e8; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 500; }
+    .error-text { color: #ea4335; font-size: 13px; min-height: 18px; }
+    .hint { color: #5f6368; font-size: 12px; }
+    .chat-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">
+      <span>Secure Connect Chat</span>
+      <span id="status" class="status-badge">Logged out</span>
+    </div>
+
+    <form id="loginPanel" class="login-panel">
+      <input type="email" id="email" placeholder="Email" autocomplete="username" required />
+      <input type="password" id="password" placeholder="Password" autocomplete="current-password" required />
+      <button type="submit">Log in</button>
+      <div id="loginError" class="error-text"></div>
+      <div class="hint">Sign up first with POST /api/auth/signup (Postman), then log in here.</div>
+    </form>
+
+    <div id="chatPanel" class="chat-panel hidden">
+      <div class="room-setup">
+        <input type="text" id="room" placeholder="Room (e.g. general)" value="general" />
+        <button id="joinBtn" type="button">Join Room</button>
+        <button id="logoutBtn" type="button">Log out</button>
+      </div>
+
+      <div id="messages" class="messages-area"></div>
+
+      <div class="input-area">
+        <input type="text" id="messageInput" placeholder="Type a message..." />
+        <button id="sendBtn" type="button">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let socket = null;
+    let me = null;
+    let currentRoom = 'general';
+
+    // Builds elements with textContent so messages can never inject HTML (XSS-safe)
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function setStatus(text, color) {
+      $('status').textContent = text;
+      $('status').style.background = color;
+    }
+
+    function appendMessage({ sender, message, room, timestamp }) {
+      const isSystem = sender === 'System';
+      const div = el('div', 'message-item ' + (isSystem ? 'system-message' : sender === me ? 'my-message' : 'user-message'));
+      if (!isSystem) div.appendChild(el('div', 'sender-name', sender + (room ? '  #' + room : '')));
+      div.appendChild(el('div', null, message));
+      if (timestamp) div.appendChild(el('div', 'timestamp', new Date(timestamp).toLocaleTimeString()));
+      $('messages').appendChild(div);
+      $('messages').scrollTop = $('messages').scrollHeight;
+    }
+
+    function connectSocket(token) {
+      socket = io({ auth: { token } });
+
+      socket.on('connect', () => setStatus('Connected: ' + socket.id.substring(0, 5) + '...', '#34a853'));
+      socket.on('disconnect', () => setStatus('Disconnected', '#ea4335'));
+      socket.on('connect_error', (err) => {
+        appendMessage({ sender: 'System', message: 'Connection error: ' + err.message });
+        setStatus('Error', '#ea4335');
+      });
+      socket.on('receive_message', appendMessage);
+      socket.on('error_message', (data) => appendMessage({ sender: 'System', message: data.message }));
+      socket.on('joined_room_ack', (data) => {
+        me = data.username;
+        currentRoom = data.room;
+        appendMessage({ sender: 'System', message: data.message + ' (as ' + data.username + ')' });
+      });
+    }
+
+    $('loginPanel').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      $('loginError').textContent = '';
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        $('loginError').textContent = data.message;
+        return;
+      }
+      $('loginPanel').classList.add('hidden');
+      $('chatPanel').classList.remove('hidden');
+      $('messages').replaceChildren();
+      connectSocket(data.token);
+    });
+
+    $('joinBtn').addEventListener('click', () => {
+      const room = $('room').value.trim() || 'general';
+      socket.emit('join_room', { room });
+    });
+
+    function sendMessage() {
+      const message = $('messageInput').value.trim();
+      if (!message) return;
+      socket.emit('send_message', { room: $('room').value.trim() || currentRoom, message });
+      $('messageInput').value = '';
+    }
+    $('sendBtn').addEventListener('click', sendMessage);
+    $('messageInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') sendMessage(); });
+
+    $('logoutBtn').addEventListener('click', async () => {
+      socket.disconnect();
+      await fetch('/api/auth/logout', { method: 'POST' });
+      me = null;
+      $('chatPanel').classList.add('hidden');
+      $('loginPanel').classList.remove('hidden');
+      setStatus('Logged out', '#5f6368');
+    });
+  </script>
+</body>
+</html>
